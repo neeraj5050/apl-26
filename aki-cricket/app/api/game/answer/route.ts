@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { filterCandidates, selectBestQuestion, calculateConfidence } from '@/lib/engine/entropy';
+import { filterCandidates, selectBestQuestion, calculateConfidence, rankCandidates } from '@/lib/engine/entropy';
 import { getNextQuestion, getFinalGuess } from '@/lib/grok/client';
 import { getPersona, getPersonaMessage } from '@/lib/engine/persona';
 import { QUESTION_BANK } from '@/lib/engine/questions';
@@ -26,18 +26,37 @@ export async function POST(req: NextRequest) {
     const confidence = calculateConfidence(newCandidates.length, gameState.totalCandidates);
     const questionsLeft = gameState.questionsLeft - 1;
 
-    // Update history
+    // Update history (both formats for compatibility)
     const newHistory = [
       ...gameState.history,
       { q: currentQuestion.text, a: answer },
     ];
     const newAskedIds = [...gameState.askedIds, currentQuestion.id];
+    
+    // Track answered questions with their IDs for invalidation
+    const newAnsweredQuestions = [
+      ...(gameState.answeredQuestions || []),
+      { questionId: currentQuestion.id, answer },
+    ];
 
-    // 3. Should we guess now?
-    if (newCandidates.length <= 1 || questionsLeft <= 0 || confidence >= 95) {
-      const topGuess = newCandidates[0]?.name || 'Unknown Player';
-      const topCandidates = newCandidates.slice(0, 3).map(c => c.name);
-      const persona = confidence >= 80 ? 'hype' : 'panic';
+    // 3. Rank candidates by how well they match all answers so far
+    const rankedCandidates = rankCandidates(newCandidates, newAnsweredQuestions);
+
+    // 4. Should we guess now?
+    const questionsAsked = 15 - questionsLeft;
+    const minQuestionsReached = questionsAsked >= 7;
+    const shouldGuess =
+      questionsLeft <= 0 || // out of questions — must guess
+      (rankedCandidates.length <= 1 && minQuestionsReached) || // only 1 left AND enough questions
+      (rankedCandidates.length <= 2 && questionsAsked >= 10) || // 2 left with many questions
+      (rankedCandidates.length <= 3 && questionsAsked >= 13); // 3 left near end
+
+    if (shouldGuess) {
+      // Use RANKED candidates — best match first
+      const topGuess = rankedCandidates[0]?.name || 'Unknown Player';
+      const topCandidates = rankedCandidates.slice(0, 3).map(c => c.name);
+      const guessConfidence = rankedCandidates.length <= 1 ? 99 : rankedCandidates.length <= 2 ? 88 : 75;
+      const persona = guessConfidence >= 80 ? 'hype' : 'panic';
 
       const guessMessage = await getFinalGuess({
         topCandidates: topCandidates.length > 0 ? topCandidates : [topGuess],
@@ -49,28 +68,29 @@ export async function POST(req: NextRequest) {
         action: 'guess',
         topGuess,
         topCandidates,
-        confidence,
+        confidence: guessConfidence,
         guessMessage,
         persona,
         personaMessage: getPersonaMessage(persona as 'hype' | 'panic'),
         questionsAsked: newHistory.length,
         gameState: {
           ...gameState,
-          candidates: newCandidates,
+          candidates: rankedCandidates,
           askedIds: newAskedIds,
           history: newHistory,
+          answeredQuestions: newAnsweredQuestions,
           questionsLeft,
         },
       });
     }
 
-    // 4. Pick the best next question
-    const bestQ = selectBestQuestion(newCandidates, newAskedIds);
+    // 5. Pick the best next question (with invalidation awareness)
+    const bestQ = selectBestQuestion(rankedCandidates, newAskedIds, newAnsweredQuestions);
     const persona = getPersona(confidence, questionsLeft);
 
-    // 5. Grok rephrases the question
+    // 6. Grok rephrases the question
     const naturalQuestion = await getNextQuestion({
-      candidates: newCandidates.map(c => c.name),
+      candidates: rankedCandidates.slice(0, 10).map(c => c.name),
       askedQuestions: newHistory,
       suggestedQuestion: bestQ.text,
       persona,
@@ -80,16 +100,17 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       action: 'continue',
       question: { ...bestQ, display: naturalQuestion },
-      candidates: newCandidates.length,
+      candidates: rankedCandidates.length,
       confidence,
       persona,
       personaMessage: getPersonaMessage(persona),
       questionsLeft,
       gameState: {
         ...gameState,
-        candidates: newCandidates,
+        candidates: rankedCandidates,
         askedIds: newAskedIds,
         history: newHistory,
+        answeredQuestions: newAnsweredQuestions,
         questionsLeft,
       },
     });

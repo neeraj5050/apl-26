@@ -6,7 +6,6 @@ import { players } from '@/lib/db/seed/ipl-data';
 
 export async function POST() {
   try {
-    // Use in-memory seed data (works without MongoDB)
     const allCandidates = players;
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
@@ -40,6 +39,7 @@ export async function POST() {
         totalCandidates: allCandidates.length,
         askedIds: [firstQuestion.id],
         history: [],
+        answeredQuestions: [],
         questionsLeft: 15,
       },
     });
