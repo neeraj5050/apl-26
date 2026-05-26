@@ -1,7 +1,6 @@
 import { QUESTION_BANK, Question } from './questions';
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type PlayerCandidate = Record<string, any>;
+export type PlayerCandidate = Record<string, any>; // eslint-disable-line
 
 /**
  * Check if a candidate matches a question's expected answer

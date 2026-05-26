@@ -1,5 +1,5 @@
 'use client';
-import { useState, useCallback, Suspense } from 'react';
+import { Suspense } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
@@ -9,132 +9,19 @@ import { QuestionCounter } from '@/components/game/QuestionCounter';
 import { ConfidenceMeter } from '@/components/game/ConfidenceMeter';
 import { PersonaTag } from '@/components/game/PersonaTag';
 import { GlowButton } from '@/components/ui/GlowButton';
-import type { Persona } from '@/lib/engine/persona';
+import { useGame } from '@/hooks/useGame';
 
 const StadiumScene = dynamic(
   () => import('@/components/three/StadiumScene'),
   { ssr: false }
 );
 
-interface GameState {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  candidates: any[];
-  totalCandidates: number;
-  askedIds: string[];
-  history: { q: string; a: string }[];
-  questionsLeft: number;
-}
-
-type Phase = 'idle' | 'loading' | 'playing' | 'thinking' | 'guessing' | 'result';
-
 export default function GamePage() {
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [question, setQuestion] = useState('');
-  const [questionId, setQuestionId] = useState('');
-  const [questionNumber, setQuestionNumber] = useState(0);
-  const [questionsLeft, setQuestionsLeft] = useState(15);
-  const [confidence, setConfidence] = useState(5);
-  const [persona, setPersona] = useState<Persona>('neutral');
-  const [personaMessage, setPersonaMessage] = useState('Think of any IPL player...');
-  const [guess, setGuess] = useState('');
-  const [guessMessage, setGuessMessage] = useState('');
-  const [correct, setCorrect] = useState<boolean | null>(null);
-  const [showExplosion, setShowExplosion] = useState(false);
-  const [gameState, setGameState] = useState<GameState | null>(null);
-
-  const startGame = useCallback(async () => {
-    setPhase('loading');
-    try {
-      const res = await fetch('/api/game/start', { method: 'POST' });
-      const data = await res.json();
-      setQuestion(data.question.display);
-      setQuestionId(data.question.id);
-      setQuestionNumber(1);
-      setQuestionsLeft(data.questionsLeft);
-      setConfidence(data.confidence);
-      setPersona(data.persona);
-      setPersonaMessage(data.personaMessage);
-      setGameState(data.gameState);
-      setPhase('playing');
-    } catch {
-      setPersonaMessage('Failed to start game. Try again!');
-      setPhase('idle');
-    }
-  }, []);
-
-  const handleAnswer = useCallback(async (answer: 'yes' | 'no' | 'maybe') => {
-    if (!gameState) return;
-    setPhase('thinking');
-
-    try {
-      const res = await fetch('/api/game/answer', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ answer, questionId, gameState }),
-      });
-      const data = await res.json();
-
-      if (data.action === 'guess') {
-        setGuess(data.topGuess);
-        setGuessMessage(data.guessMessage);
-        setConfidence(data.confidence);
-        setPersona(data.persona);
-        setPersonaMessage(data.personaMessage);
-        setGameState(data.gameState);
-        setPhase('guessing');
-      } else {
-        setQuestion(data.question.display);
-        setQuestionId(data.question.id);
-        setQuestionNumber(prev => prev + 1);
-        setQuestionsLeft(data.questionsLeft);
-        setConfidence(data.confidence);
-        setPersona(data.persona);
-        setPersonaMessage(data.personaMessage);
-        setGameState(data.gameState);
-        setPhase('playing');
-      }
-    } catch {
-      setPersonaMessage('Something went wrong. Let me try again...');
-      setPhase('playing');
-    }
-  }, [gameState, questionId]);
-
-  const handleGuessResponse = useCallback(async (isCorrect: boolean) => {
-    setCorrect(isCorrect);
-    if (isCorrect) setShowExplosion(true);
-
-    try {
-      await fetch('/api/game/guess', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          correct: isCorrect,
-          guessedPlayer: guess,
-          questionsAsked: questionNumber,
-          confidence,
-        }),
-      });
-    } catch { /* ignore logging errors */ }
-
-    setPhase('result');
-    if (isCorrect) {
-      setTimeout(() => setShowExplosion(false), 4000);
-    }
-  }, [guess, questionNumber, confidence]);
-
-  const resetGame = useCallback(() => {
-    setPhase('idle');
-    setQuestion('');
-    setQuestionNumber(0);
-    setQuestionsLeft(15);
-    setConfidence(5);
-    setPersona('neutral');
-    setPersonaMessage('Think of any IPL player...');
-    setGuess('');
-    setCorrect(null);
-    setShowExplosion(false);
-    setGameState(null);
-  }, []);
+  const {
+    phase, question, questionNumber, questionsLeft, confidence,
+    persona, personaMessage, guess, guessMessage, correct, showExplosion,
+    startGame, handleAnswer, handleGuessResponse, resetGame,
+  } = useGame();
 
   return (
     <div className="relative w-screen h-screen bg-dark-bg overflow-hidden">
@@ -246,7 +133,7 @@ export default function GamePage() {
                 {correct ? 'Aki Got It Right!' : 'You Stumped Aki!'}
               </h2>
               <p className="text-gray-400 mb-2">
-                {correct ? `Guessed in ${questionNumber} questions` : `The answer was hidden well`}
+                {correct ? `Guessed in ${questionNumber} questions` : 'The answer was hidden well'}
               </p>
               <p className="text-gray-600 text-sm">Player: {guess}</p>
             </motion.div>
@@ -254,7 +141,7 @@ export default function GamePage() {
             <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.5 }}
               className="flex gap-4">
               <GlowButton color="cyan" onClick={resetGame}>🔄 Play Again</GlowButton>
-              <Link href="/leaderboard"><GlowButton color="gold">🏆 Leaderboard</GlowButton></Link>
+              <Link href="/"><GlowButton color="gold">🏠 Home</GlowButton></Link>
             </motion.div>
           </div>
         )}
