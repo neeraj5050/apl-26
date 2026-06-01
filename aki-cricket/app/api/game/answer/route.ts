@@ -1,101 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { filterCandidates, selectBestQuestion, calculateConfidence, rankCandidates } from '@/lib/engine/entropy';
-import { getNextQuestion, getFinalGuess } from '@/lib/grok/client';
+import { rephraseQuestion, generateGuessNarration } from '@/lib/grok/client';
 import { getPersona, getPersonaMessage } from '@/lib/engine/persona';
 import { QUESTION_BANK } from '@/lib/engine/questions';
+
+const MAX_QUESTIONS = 20;
+const MAX_DONT_KNOW = 5;
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
     const { answer, questionId, gameState } = body;
 
-    // Find the current question from bank
     const currentQuestion = QUESTION_BANK.find(q => q.id === questionId);
     if (!currentQuestion) {
       return NextResponse.json({ error: 'Invalid question' }, { status: 400 });
     }
 
-    // 1. Filter candidates based on answer
-    const newCandidates = filterCandidates(
-      gameState.candidates,
-      currentQuestion,
-      answer
-    );
+    // Track dont_know count
+    const newDontKnowCount = (gameState.dontKnowCount || 0) + (answer === 'dont_know' ? 1 : 0);
 
-    // 2. Calculate confidence
-    const confidence = calculateConfidence(newCandidates.length, gameState.totalCandidates);
-    const questionsLeft = gameState.questionsLeft - 1;
+    // dont_know doesn't cost a question (up to MAX_DONT_KNOW free passes)
+    const costsFreePass = answer === 'dont_know' && newDontKnowCount <= MAX_DONT_KNOW;
+    const questionsLeft = costsFreePass ? gameState.questionsLeft : gameState.questionsLeft - 1;
 
-    // Update history (both formats for compatibility)
-    const newHistory = [
-      ...gameState.history,
-      { q: currentQuestion.text, a: answer },
-    ];
+    // 1. Filter candidates
+    const newCandidates = filterCandidates(gameState.candidates, currentQuestion, answer);
+
+    // 2. Update history
+    const newHistory = [...gameState.history, { questionId: currentQuestion.id, q: currentQuestion.text, a: answer }];
     const newAskedIds = [...gameState.askedIds, currentQuestion.id];
-    
-    // Track answered questions with their IDs for invalidation
-    const newAnsweredQuestions = [
-      ...(gameState.answeredQuestions || []),
-      { questionId: currentQuestion.id, answer },
-    ];
+    const newAnsweredQuestions = [...(gameState.answeredQuestions || []), { questionId: currentQuestion.id, answer }];
 
-    // 3. Rank candidates by how well they match all answers so far
+    // 3. Rank candidates
     const rankedCandidates = rankCandidates(newCandidates, newAnsweredQuestions);
 
-    // 4. Should we guess now?
-    const questionsAsked = 15 - questionsLeft;
-    const minQuestionsReached = questionsAsked >= 7;
+    // 4. Calculate confidence
+    const confidence = calculateConfidence(rankedCandidates.length, gameState.totalCandidates);
+
+    // 5. Should we guess?
+    const questionsAsked = MAX_QUESTIONS - questionsLeft;
     const shouldGuess =
-      questionsLeft <= 0 || // out of questions — must guess
-      (rankedCandidates.length <= 1 && minQuestionsReached) || // only 1 left AND enough questions
-      (rankedCandidates.length <= 2 && questionsAsked >= 10) || // 2 left with many questions
-      (rankedCandidates.length <= 3 && questionsAsked >= 13); // 3 left near end
+      questionsLeft <= 0 ||
+      (rankedCandidates.length <= 1 && questionsAsked >= 7) ||
+      (rankedCandidates.length <= 2 && questionsAsked >= 10) ||
+      (rankedCandidates.length <= 3 && questionsAsked >= 14);
 
     if (shouldGuess) {
-      // Use RANKED candidates — best match first
       const topGuess = rankedCandidates[0]?.name || 'Unknown Player';
-      const topCandidates = rankedCandidates.slice(0, 3).map(c => c.name);
       const guessConfidence = rankedCandidates.length <= 1 ? 99 : rankedCandidates.length <= 2 ? 88 : 75;
       const persona = guessConfidence >= 80 ? 'hype' : 'panic';
 
-      const guessMessage = await getFinalGuess({
-        topCandidates: topCandidates.length > 0 ? topCandidates : [topGuess],
-        questionsAsked: newHistory,
-        persona,
-      });
+      const guessMessage = await generateGuessNarration(topGuess, guessConfidence, persona, newHistory.length);
 
       return NextResponse.json({
         action: 'guess',
         topGuess,
-        topCandidates,
+        topCandidates: rankedCandidates.slice(0, 3).map(c => c.name),
         confidence: guessConfidence,
         guessMessage,
         persona,
         personaMessage: getPersonaMessage(persona as 'hype' | 'panic'),
         questionsAsked: newHistory.length,
-        gameState: {
-          ...gameState,
-          candidates: rankedCandidates,
-          askedIds: newAskedIds,
-          history: newHistory,
-          answeredQuestions: newAnsweredQuestions,
-          questionsLeft,
-        },
+        candidatesRemaining: rankedCandidates.length,
+        gameState: { ...gameState, candidates: rankedCandidates, askedIds: newAskedIds, history: newHistory, answeredQuestions: newAnsweredQuestions, questionsLeft, dontKnowCount: newDontKnowCount },
       });
     }
 
-    // 5. Pick the best next question (with invalidation awareness)
+    // 6. Pick next question
     const bestQ = selectBestQuestion(rankedCandidates, newAskedIds, newAnsweredQuestions);
     const persona = getPersona(confidence, questionsLeft);
-
-    // 6. Grok rephrases the question
-    const naturalQuestion = await getNextQuestion({
-      candidates: rankedCandidates.slice(0, 10).map(c => c.name),
-      askedQuestions: newHistory,
-      suggestedQuestion: bestQ.text,
-      persona,
-      questionsLeft,
-    });
+    const naturalQuestion = await rephraseQuestion(bestQ.text, persona);
 
     return NextResponse.json({
       action: 'continue',
@@ -105,14 +80,8 @@ export async function POST(req: NextRequest) {
       persona,
       personaMessage: getPersonaMessage(persona),
       questionsLeft,
-      gameState: {
-        ...gameState,
-        candidates: rankedCandidates,
-        askedIds: newAskedIds,
-        history: newHistory,
-        answeredQuestions: newAnsweredQuestions,
-        questionsLeft,
-      },
+      candidatesRemaining: rankedCandidates.length,
+      gameState: { ...gameState, candidates: rankedCandidates, askedIds: newAskedIds, history: newHistory, answeredQuestions: newAnsweredQuestions, questionsLeft, dontKnowCount: newDontKnowCount },
     });
   } catch (error) {
     console.error('Answer error:', error);

@@ -6,20 +6,23 @@ import { selectBestQuestion, filterCandidates, calculateConfidence, rankCandidat
 import { getPersona, getPersonaMessage } from '@/lib/engine/persona';
 import { QUESTION_BANK } from '@/lib/engine/questions';
 import type { Persona } from '@/lib/engine/persona';
+import type { Answer } from '@/lib/engine/entropy';
+
 type PlayerCandidate = Record<string, any>; // eslint-disable-line
 
 interface GameState {
   candidates: PlayerCandidate[];
   totalCandidates: number;
   askedIds: string[];
-  history: { q: string; a: string }[];
+  history: { questionId: string; q: string; a: string }[];
   answeredQuestions: { questionId: string; answer: string }[];
   questionsLeft: number;
+  dontKnowCount: number;
 }
 
 type Phase = 'idle' | 'loading' | 'playing' | 'thinking' | 'guessing' | 'result';
 
-interface UseGameReturn {
+export interface UseGameReturn {
   phase: Phase;
   question: string;
   questionNumber: number;
@@ -31,18 +34,22 @@ interface UseGameReturn {
   guessMessage: string;
   correct: boolean | null;
   showExplosion: boolean;
+  candidatesRemaining: number;
   startGame: () => void;
-  handleAnswer: (answer: 'yes' | 'no' | 'maybe') => void;
+  handleAnswer: (answer: Answer) => void;
   handleGuessResponse: (isCorrect: boolean) => void;
   resetGame: () => void;
 }
+
+const MAX_QUESTIONS = 20;
+const MAX_DONT_KNOW = 5;
 
 export function useGame(): UseGameReturn {
   const [phase, setPhase] = useState<Phase>('idle');
   const [question, setQuestion] = useState('');
   const [questionId, setQuestionId] = useState('');
   const [questionNumber, setQuestionNumber] = useState(0);
-  const [questionsLeft, setQuestionsLeft] = useState(15);
+  const [questionsLeft, setQuestionsLeft] = useState(MAX_QUESTIONS);
   const [confidence, setConfidence] = useState(5);
   const [persona, setPersona] = useState<Persona>('neutral');
   const [personaMessage, setPersonaMessage] = useState('Think of any IPL player...');
@@ -51,80 +58,74 @@ export function useGame(): UseGameReturn {
   const [correct, setCorrect] = useState<boolean | null>(null);
   const [showExplosion, setShowExplosion] = useState(false);
   const [gameState, setGameState] = useState<GameState | null>(null);
+  const [candidatesRemaining, setCandidatesRemaining] = useState(0);
 
   const startGame = useCallback(() => {
     setPhase('loading');
-
-    // Small delay for dramatic effect
     setTimeout(() => {
       const allCandidates = players;
       const firstQuestion = selectBestQuestion(allCandidates, []);
-      const p = getPersona(5, 15);
+      const p = getPersona(5, MAX_QUESTIONS);
 
       setQuestion(firstQuestion.text);
       setQuestionId(firstQuestion.id);
       setQuestionNumber(1);
-      setQuestionsLeft(15);
+      setQuestionsLeft(MAX_QUESTIONS);
       setConfidence(5);
       setPersona(p);
       setPersonaMessage(getPersonaMessage(p));
+      setCandidatesRemaining(allCandidates.length);
       setGameState({
         candidates: allCandidates,
         totalCandidates: allCandidates.length,
         askedIds: [firstQuestion.id],
         history: [],
         answeredQuestions: [],
-        questionsLeft: 15,
+        questionsLeft: MAX_QUESTIONS,
+        dontKnowCount: 0,
       });
       setPhase('playing');
     }, 800);
   }, []);
 
-  const handleAnswer = useCallback((answer: 'yes' | 'no' | 'maybe') => {
+  const handleAnswer = useCallback((answer: Answer) => {
     if (!gameState) return;
     setPhase('thinking');
 
-    // Small delay to simulate thinking
     setTimeout(() => {
       const currentQuestion = QUESTION_BANK.find(q => q.id === questionId);
-      if (!currentQuestion) {
-        setPhase('playing');
-        return;
-      }
+      if (!currentQuestion) { setPhase('playing'); return; }
+
+      // Track dont_know count
+      const newDontKnowCount = gameState.dontKnowCount + (answer === 'dont_know' ? 1 : 0);
+
+      // dont_know doesn't cost a question (up to MAX_DONT_KNOW free passes)
+      const costsFreePass = answer === 'dont_know' && newDontKnowCount <= MAX_DONT_KNOW;
+      const newQuestionsLeft = costsFreePass ? gameState.questionsLeft : gameState.questionsLeft - 1;
 
       // 1. Filter candidates
-      const newCandidates = filterCandidates(
-        gameState.candidates,
-        currentQuestion,
-        answer
-      );
+      const newCandidates = filterCandidates(gameState.candidates, currentQuestion, answer);
 
-      // 2. Calculate confidence
-      const newConfidence = calculateConfidence(newCandidates.length, gameState.totalCandidates);
-      const newQuestionsLeft = gameState.questionsLeft - 1;
-
-      // Update history
-      const newHistory = [
-        ...gameState.history,
-        { q: currentQuestion.text, a: answer },
-      ];
+      // 2. Update history
+      const newHistory = [...gameState.history, { questionId: currentQuestion.id, q: currentQuestion.text, a: answer }];
       const newAskedIds = [...gameState.askedIds, currentQuestion.id];
-      const newAnsweredQuestions = [
-        ...gameState.answeredQuestions,
-        { questionId: currentQuestion.id, answer },
-      ];
+      const newAnsweredQuestions = [...gameState.answeredQuestions, { questionId: currentQuestion.id, answer }];
 
       // 3. Rank candidates
       const rankedCandidates = rankCandidates(newCandidates, newAnsweredQuestions);
 
-      // 4. Should we guess?
-      const questionsAsked = 15 - newQuestionsLeft;
-      const minQuestionsReached = questionsAsked >= 7;
+      // 4. Calculate confidence
+      const newConfidence = calculateConfidence(rankedCandidates.length, gameState.totalCandidates);
+
+      setCandidatesRemaining(rankedCandidates.length);
+
+      // 5. Should we guess?
+      const questionsAsked = MAX_QUESTIONS - newQuestionsLeft;
       const shouldGuess =
         newQuestionsLeft <= 0 ||
-        (rankedCandidates.length <= 1 && minQuestionsReached) ||
+        (rankedCandidates.length <= 1 && questionsAsked >= 7) ||
         (rankedCandidates.length <= 2 && questionsAsked >= 10) ||
-        (rankedCandidates.length <= 3 && questionsAsked >= 13);
+        (rankedCandidates.length <= 3 && questionsAsked >= 14);
 
       if (shouldGuess) {
         const topGuess = rankedCandidates[0]?.name || 'Unknown Player';
@@ -136,19 +137,12 @@ export function useGame(): UseGameReturn {
         setConfidence(guessConf);
         setPersona(p);
         setPersonaMessage(getPersonaMessage(p));
-        setGameState({
-          ...gameState,
-          candidates: rankedCandidates,
-          askedIds: newAskedIds,
-          history: newHistory,
-          answeredQuestions: newAnsweredQuestions,
-          questionsLeft: newQuestionsLeft,
-        });
+        setGameState({ ...gameState, candidates: rankedCandidates, askedIds: newAskedIds, history: newHistory, answeredQuestions: newAnsweredQuestions, questionsLeft: newQuestionsLeft, dontKnowCount: newDontKnowCount });
         setPhase('guessing');
         return;
       }
 
-      // 5. Pick next question
+      // 6. Pick next question
       const bestQ = selectBestQuestion(rankedCandidates, newAskedIds, newAnsweredQuestions);
       const p = getPersona(newConfidence, newQuestionsLeft);
 
@@ -159,25 +153,16 @@ export function useGame(): UseGameReturn {
       setConfidence(newConfidence);
       setPersona(p);
       setPersonaMessage(getPersonaMessage(p));
-      setGameState({
-        ...gameState,
-        candidates: rankedCandidates,
-        askedIds: newAskedIds,
-        history: newHistory,
-        answeredQuestions: newAnsweredQuestions,
-        questionsLeft: newQuestionsLeft,
-      });
+      setGameState({ ...gameState, candidates: rankedCandidates, askedIds: newAskedIds, history: newHistory, answeredQuestions: newAnsweredQuestions, questionsLeft: newQuestionsLeft, dontKnowCount: newDontKnowCount });
       setPhase('playing');
-    }, 600 + Math.random() * 800); // Random delay 0.6-1.4s for realism
+    }, 600 + Math.random() * 800);
   }, [gameState, questionId]);
 
   const handleGuessResponse = useCallback((isCorrect: boolean) => {
     setCorrect(isCorrect);
     if (isCorrect) setShowExplosion(true);
     setPhase('result');
-    if (isCorrect) {
-      setTimeout(() => setShowExplosion(false), 4000);
-    }
+    if (isCorrect) setTimeout(() => setShowExplosion(false), 4000);
   }, []);
 
   const resetGame = useCallback(() => {
@@ -185,7 +170,7 @@ export function useGame(): UseGameReturn {
     setQuestion('');
     setQuestionId('');
     setQuestionNumber(0);
-    setQuestionsLeft(15);
+    setQuestionsLeft(MAX_QUESTIONS);
     setConfidence(5);
     setPersona('neutral');
     setPersonaMessage('Think of any IPL player...');
@@ -194,11 +179,13 @@ export function useGame(): UseGameReturn {
     setCorrect(null);
     setShowExplosion(false);
     setGameState(null);
+    setCandidatesRemaining(0);
   }, []);
 
   return {
     phase, question, questionNumber, questionsLeft, confidence,
     persona, personaMessage, guess, guessMessage, correct, showExplosion,
+    candidatesRemaining,
     startGame, handleAnswer, handleGuessResponse, resetGame,
   };
 }

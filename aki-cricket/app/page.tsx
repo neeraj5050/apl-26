@@ -55,7 +55,7 @@ export default function HomePage() {
           transition={{ delay: 0.5 }}
           className="text-purple-300 text-center text-sm md:text-base mb-10 max-w-md italic"
         >
-          &quot;Think of any IPL cricketer. I&apos;ll guess who it is in 15 questions.&quot;
+          &quot;Think of any IPL cricketer. I&apos;ll guess who it is in 20 questions.&quot;
         </motion.p>
 
         {/* CTA Buttons */}
@@ -96,7 +96,7 @@ export default function HomePage() {
           transition={{ delay: 1.5 }}
           className="absolute bottom-8 right-8 hidden md:flex gap-6 text-gray-600 text-xs font-mono"
         >
-          <span>45+ Players</span>
+          <span>150+ Players</span>
           <span>•</span>
           <span>Powered by Grok AI</span>
           <span>•</span>

@@ -1,46 +1,38 @@
 import { NextResponse } from 'next/server';
 import { selectBestQuestion } from '@/lib/engine/entropy';
 import { getPersona, getPersonaMessage } from '@/lib/engine/persona';
-import { getNextQuestion } from '@/lib/grok/client';
+import { rephraseQuestion } from '@/lib/grok/client';
 import { players } from '@/lib/db/seed/ipl-data';
+
+const MAX_QUESTIONS = 20;
 
 export async function POST() {
   try {
     const allCandidates = players;
     const sessionId = `session_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-    // Select the first question using entropy
     const firstQuestion = selectBestQuestion(allCandidates, []);
-    const persona = getPersona(5, 15);
+    const persona = getPersona(5, MAX_QUESTIONS);
 
-    // Try to get Grok to rephrase
-    const displayQuestion = await getNextQuestion({
-      candidates: allCandidates.map(c => c.name),
-      askedQuestions: [],
-      suggestedQuestion: firstQuestion.text,
-      persona,
-      questionsLeft: 15,
-    });
+    const displayQuestion = await rephraseQuestion(firstQuestion.text, persona);
 
     return NextResponse.json({
       sessionId,
-      question: {
-        ...firstQuestion,
-        display: displayQuestion,
-      },
+      question: { ...firstQuestion, display: displayQuestion },
       totalCandidates: allCandidates.length,
       candidates: allCandidates.length,
       confidence: 5,
       persona,
       personaMessage: getPersonaMessage(persona),
-      questionsLeft: 15,
+      questionsLeft: MAX_QUESTIONS,
       gameState: {
         candidates: allCandidates,
         totalCandidates: allCandidates.length,
         askedIds: [firstQuestion.id],
         history: [],
         answeredQuestions: [],
-        questionsLeft: 15,
+        questionsLeft: MAX_QUESTIONS,
+        dontKnowCount: 0,
       },
     });
   } catch (error) {

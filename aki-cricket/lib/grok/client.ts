@@ -6,85 +6,67 @@ const grok = new OpenAI({
 });
 
 const PERSONA_PROMPTS: Record<string, string> = {
-  confident: "You are cockily confident. Be playful and slightly smug. Use cricket emojis.",
-  neutral:   "You are focused and strategic. Be curious and methodical.",
-  panic:     "You are running out of questions and getting nervous. Show it subtly.",
-  hype:      "You just had a revelation. Be hyped and dramatic about it.",
-  surprised: "You are surprised by the player's answer. Show genuine surprise.",
+  neutral:   "You are Aki, a curious IPL cricket oracle. Rephrase in an engaging, cricket-flavored way.",
+  confident: "You are Aki, smugly confident. Rephrase with a cocky, playful tone. Use cricket slang.",
+  panic:     "You are Aki, running out of time! Rephrase desperately, with urgency.",
+  hype:      "You are Aki, absolutely HYPE. Use emojis, uppercase, and pure excitement.",
+  surprised: "You are Aki, totally shocked. Rephrase with disbelief and cricket metaphors.",
 };
 
-export async function getNextQuestion(params: {
-  candidates: string[];
-  askedQuestions: { q: string; a: string }[];
-  suggestedQuestion: string;
-  persona: string;
-  questionsLeft: number;
-}): Promise<string> {
-  // Fallback if no API key
+export async function rephraseQuestion(
+  baseQuestion: string,
+  persona: string
+): Promise<string> {
   if (!process.env.GROK_API_KEY || process.env.GROK_API_KEY === 'xai-your-api-key-here') {
-    return params.suggestedQuestion;
+    return baseQuestion;
   }
 
   try {
-    const prompt = `You are Aki, an AI cricket expert playing an Akinator-style IPL guessing game.
-
-Remaining possible players: ${params.candidates.slice(0, 10).join(', ')}${params.candidates.length > 10 ? ` ... and ${params.candidates.length - 10} more` : ''}
-
-Questions asked so far:
-${params.askedQuestions.map((q, i) => `${i + 1}. "${q.q}" → ${q.a}`).join('\n') || 'None yet'}
-
-Questions remaining: ${params.questionsLeft}
-
-Personality: ${PERSONA_PROMPTS[params.persona] || PERSONA_PROMPTS.neutral}
-
-Your next strategic question should be about: "${params.suggestedQuestion}"
-
-Rephrase that question naturally in your current personality.
-One sentence only. Make it feel human and fun.
-Return ONLY the question text, nothing else.`;
-
     const response = await grok.chat.completions.create({
-      model: 'grok-4.3',
-      messages: [{ role: 'user', content: prompt }],
-      max_tokens: 100,
+      model: 'grok-3-mini',
+      messages: [
+        {
+          role: 'system',
+          content: `${PERSONA_PROMPTS[persona] ?? PERSONA_PROMPTS.neutral} Keep it under 15 words. End with a 🏏 emoji. Do NOT change the meaning of the question.`
+        },
+        { role: 'user', content: `Original: "${baseQuestion}"\nRephrased:` }
+      ],
+      max_tokens: 80,
       temperature: 0.7,
     });
-
-    return response.choices[0].message.content?.trim() || params.suggestedQuestion;
+    return response.choices[0].message.content?.trim() || baseQuestion;
   } catch (error) {
-    console.error('Grok API error:', error);
-    return params.suggestedQuestion;
+    console.error('Grok rephrase error:', error);
+    return baseQuestion;
   }
 }
 
-export async function getFinalGuess(params: {
-  topCandidates: string[];
-  questionsAsked: { q: string; a: string }[];
-  persona: string;
-}): Promise<string> {
+export async function generateGuessNarration(
+  playerName: string,
+  confidence: number,
+  persona: string,
+  questionsAsked?: number
+): Promise<string> {
   if (!process.env.GROK_API_KEY || process.env.GROK_API_KEY === 'xai-your-api-key-here') {
-    return `I think you're thinking of... ${params.topCandidates[0]}! 🏏`;
+    return confidence >= 80
+      ? `I KNEW IT! It's ${playerName}! 🏏🔥`
+      : `I'm going with my gut... ${playerName}? 😰`;
   }
 
   try {
-    const prompt = `You are Aki, making your final IPL guess.
-Top candidates: ${params.topCandidates.join(', ')}
-Based on all answers, your best guess is: ${params.topCandidates[0]}
-
-Persona: ${params.persona === 'hype' ? 'Dramatic and confident reveal' : 'Nervous but committing to a guess'}
-
-Write ONE dramatic reveal sentence. Include the player name.
-Example: "I see it now... you were thinking of MS Dhoni! 🏏"
-Return ONLY the reveal sentence.`;
-
+    const qInfo = questionsAsked ? ` after ${questionsAsked} questions` : '';
     const response = await grok.chat.completions.create({
-      model: 'grok-4.3',
-      messages: [{ role: 'user', content: prompt }],
+      model: 'grok-3-mini',
+      messages: [{
+        role: 'user',
+        content: `Aki the cricket oracle is about to guess "${playerName}" with ${confidence}% confidence${qInfo}.
+Persona: ${persona === 'hype' ? 'Dramatic and confident reveal' : 'Nervous but committed'}.
+Write ONE dramatic reveal sentence with the player name. Cricket references only. Return ONLY the sentence.`
+      }],
       max_tokens: 80,
     });
-
-    return response.choices[0].message.content?.trim() || `My guess is ${params.topCandidates[0]}! 🏏`;
+    return response.choices[0].message.content?.trim() || `My guess is ${playerName}! 🏏`;
   } catch {
-    return `I think you're thinking of... ${params.topCandidates[0]}! 🏏`;
+    return `I think you're thinking of... ${playerName}! 🏏`;
   }
 }

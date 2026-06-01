@@ -20,6 +20,7 @@ export default function GamePage() {
   const {
     phase, question, questionNumber, questionsLeft, confidence,
     persona, personaMessage, guess, guessMessage, correct, showExplosion,
+    candidatesRemaining,
     startGame, handleAnswer, handleGuessResponse, resetGame,
   } = useGame();
 
@@ -46,7 +47,7 @@ export default function GamePage() {
               <p className="text-5xl mb-4">🏏</p>
               <h1 className="neon-text text-4xl md:text-5xl font-bold tracking-wider mb-3">AKI CRICKET</h1>
               <p className="text-gray-400 text-lg">Think of any IPL player...</p>
-              <p className="text-gray-600 text-sm mt-2">I&apos;ll guess who it is in 15 questions</p>
+              <p className="text-gray-600 text-sm mt-2">I&apos;ll guess who it is in 20 questions</p>
             </motion.div>
             <GlowButton color="cyan" size="lg" onClick={startGame}>
               ▶ I&apos;m Ready
@@ -70,7 +71,7 @@ export default function GamePage() {
         {/* PLAYING / THINKING STATE */}
         {(phase === 'playing' || phase === 'thinking') && (
           <>
-            <QuestionCounter current={questionNumber} total={15} questionsLeft={questionsLeft} />
+            <QuestionCounter current={questionNumber} total={20} questionsLeft={questionsLeft} />
             <PersonaTag persona={persona} message={personaMessage} />
 
             <AnimatePresence mode="wait">
@@ -87,6 +88,17 @@ export default function GamePage() {
             </AnimatePresence>
 
             <ConfidenceMeter value={confidence} />
+
+            {/* Candidates remaining indicator */}
+            {candidatesRemaining > 0 && (
+              <motion.div
+                initial={{ opacity: 0 }}
+                animate={{ opacity: 1 }}
+                className="text-gray-600 text-xs font-mono"
+              >
+                🎯 {candidatesRemaining} players remaining
+              </motion.div>
+            )}
 
             {phase === 'thinking' ? (
               <div className="flex gap-4 w-full max-w-lg justify-center">
